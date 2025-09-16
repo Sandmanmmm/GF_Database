@@ -1,4 +1,4 @@
-# Quick PostgreSQL Status Check
+﻿# Quick PostgreSQL Status Check
 
 Write-Host "=== PostgreSQL Status Check ===" -ForegroundColor Green
 
@@ -6,27 +6,27 @@ Write-Host "=== PostgreSQL Status Check ===" -ForegroundColor Green
 Write-Host "Checking PostgreSQL service..." -ForegroundColor Cyan
 $pgService = Get-Service -Name "postgresql*" -ErrorAction SilentlyContinue
 if ($pgService) {
-    Write-Host "✓ PostgreSQL service found: $($pgService.Name) - Status: $($pgService.Status)" -ForegroundColor Green
+    Write-Host "[OK] PostgreSQL service found: $($pgService.Name) - Status: $($pgService.Status)" -ForegroundColor Green
 } else {
-    Write-Host "✗ PostgreSQL service not found" -ForegroundColor Red
+    Write-Host "[FAIL] PostgreSQL service not found" -ForegroundColor Red
 }
 
 # Check port 5433
 Write-Host "Checking port 5433..." -ForegroundColor Cyan
 $connection = Test-NetConnection -ComputerName localhost -Port 5433 -InformationLevel Quiet -WarningAction SilentlyContinue
 if ($connection) {
-    Write-Host "✓ Port 5433 is listening" -ForegroundColor Green
+    Write-Host "[OK] Port 5433 is listening" -ForegroundColor Green
 } else {
-    Write-Host "✗ Port 5433 is not responding" -ForegroundColor Red
+    Write-Host "[FAIL] Port 5433 is not responding" -ForegroundColor Red
 }
 
 # Check port 5432
 Write-Host "Checking port 5432..." -ForegroundColor Cyan
 $connection2 = Test-NetConnection -ComputerName localhost -Port 5432 -InformationLevel Quiet -WarningAction SilentlyContinue
 if ($connection2) {
-    Write-Host "✓ Port 5432 is listening" -ForegroundColor Green
+    Write-Host "[OK] Port 5432 is listening" -ForegroundColor Green
 } else {
-    Write-Host "✗ Port 5432 is not responding" -ForegroundColor Red
+    Write-Host "[FAIL] Port 5432 is not responding" -ForegroundColor Red
 }
 
 Write-Host ""
