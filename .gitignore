@@ -1,0 +1,6 @@
+# Add database directory to .gitignore
+database/.env.database
+database/backups/
+database/logs/
+*.backup
+*.dump
