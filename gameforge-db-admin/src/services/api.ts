@@ -70,6 +70,54 @@ export interface QueryResult {
   command: string;
 }
 
+export interface DatabaseMetrics {
+  timestamp: string;
+  connections: {
+    active: number;
+    idle: number;
+    total: number;
+    max: number;
+  };
+  performance: {
+    cacheHitRatio: number;
+    commits: number;
+    rollbacks: number;
+    tuplesReturned: number;
+    tuplesFetched: number;
+    tuplesInserted: number;
+    tuplesUpdated: number;
+    tuplesDeleted: number;
+    conflicts: number;
+    deadlocks: number;
+    tempFiles: number;
+    tempBytes: number;
+  };
+  storage: {
+    databaseSize: number;
+    databaseSizeFormatted: string;
+    tablespaces: Array<{
+      name: string;
+      size: string;
+      sizeBytes: number;
+    }>;
+    largestTables: Array<{
+      schema: string;
+      name: string;
+      totalSize: string;
+      tableSize: string;
+      indexSize: string;
+      sizeBytes: number;
+    }>;
+  };
+  slowQueries: Array<{
+    query: string;
+    calls: number;
+    totalTime: number;
+    meanTime: number;
+    rows: number;
+  }>;
+}
+
 export const databaseApi = {
   // Health check
   health: () => api.get('/health'),
@@ -81,6 +129,9 @@ export const databaseApi = {
   // Tables
   getTables: (env: string): Promise<{ data: TableInfo[] }> => 
     api.get(`/${env}/tables`),
+
+  getTableSchema: (env: string, tableName: string): Promise<{ data: any[] }> => 
+    api.get(`/${env}/tables/${tableName}/schema`),
 
   // Migrations
   getMigrations: (env: string): Promise<{ data: MigrationInfo[] }> => 
@@ -98,6 +149,10 @@ export const databaseApi = {
 
   deleteUser: (env: string, username: string): Promise<{ data: { message: string; username: string } }> =>
     api.delete(`/${env}/users/${username}`),
+
+  // Database metrics
+  getMetrics: (env: string): Promise<{ data: DatabaseMetrics }> =>
+    api.get(`/${env}/metrics`),
 
   // Custom queries
   executeQuery: (

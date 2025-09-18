@@ -22,7 +22,7 @@ interface DatabaseProviderProps {
 
 export const DatabaseProvider: React.FC<DatabaseProviderProps> = ({ children }) => {
   const [currentEnvironment, setCurrentEnvironment] = useState<'dev' | 'prod'>('dev');
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const apiUrl = 'http://localhost:5002';
 
   // Persist environment selection
   useEffect(() => {

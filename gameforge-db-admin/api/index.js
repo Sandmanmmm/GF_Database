@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
+const AIQueryService = require('./services/AIQueryService');
 require('dotenv').config();
 
 const app = express();
@@ -121,6 +122,221 @@ app.get('/api/:env/tables', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Get table schema
+app.get('/api/:env/tables/:tableName/schema', async (req, res) => {
+  try {
+    const { env, tableName } = req.params;
+    const pool = pools[env];
+    
+    if (!pool) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+    
+    const query = `
+      SELECT 
+        column_name,
+        data_type,
+        is_nullable,
+        column_default,
+        character_maximum_length,
+        numeric_precision,
+        numeric_scale
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' 
+        AND table_name = $1
+      ORDER BY ordinal_position;
+    `;
+    
+    const result = await pool.query(query, [tableName]);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get real-time database metrics
+app.get('/api/:env/metrics', async (req, res) => {
+  try {
+    const { env } = req.params;
+    const pool = pools[env];
+    
+    if (!pool) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+
+    // Get connection metrics
+    const connectionQuery = `
+      SELECT 
+        count(*) FILTER (WHERE state = 'active') as active_connections,
+        count(*) FILTER (WHERE state = 'idle') as idle_connections,
+        count(*) as total_connections,
+        (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') as max_connections
+      FROM pg_stat_activity 
+      WHERE datname = current_database();
+    `;
+
+    // Get database size and performance metrics
+    const performanceQuery = `
+      SELECT 
+        pg_database_size(current_database()) as database_size,
+        numbackends as backends,
+        xact_commit as commits,
+        xact_rollback as rollbacks,
+        blks_read as blocks_read,
+        blks_hit as blocks_hit,
+        tup_returned as tuples_returned,
+        tup_fetched as tuples_fetched,
+        tup_inserted as tuples_inserted,
+        tup_updated as tuples_updated,
+        tup_deleted as tuples_deleted,
+        conflicts as conflicts,
+        temp_files as temp_files,
+        temp_bytes as temp_bytes,
+        deadlocks as deadlocks,
+        stats_reset
+      FROM pg_stat_database 
+      WHERE datname = current_database();
+    `;
+
+    // Get tablespace sizes
+    const tablespaceQuery = `
+      SELECT 
+        spcname as name,
+        pg_size_pretty(pg_tablespace_size(spcname)) as size,
+        pg_tablespace_size(spcname) as size_bytes
+      FROM pg_tablespace
+      ORDER BY pg_tablespace_size(spcname) DESC;
+    `;
+
+    // Get slow queries (only if pg_stat_statements is available)
+    const slowQueriesQuery = `
+      SELECT 
+        query,
+        calls,
+        total_exec_time,
+        mean_exec_time,
+        rows
+      FROM pg_stat_statements 
+      WHERE query NOT LIKE '%pg_stat_statements%'
+        AND query NOT LIKE '%information_schema%'
+      ORDER BY mean_exec_time DESC 
+      LIMIT 10;
+    `;
+
+    // Get table sizes
+    const tableSizesQuery = `
+      SELECT 
+        schemaname,
+        tablename,
+        pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size,
+        pg_total_relation_size(schemaname||'.'||tablename) as size_bytes,
+        pg_size_pretty(pg_relation_size(schemaname||'.'||tablename)) as table_size,
+        pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename) - 
+                      pg_relation_size(schemaname||'.'||tablename)) as index_size
+      FROM pg_tables 
+      WHERE schemaname = 'public'
+      ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
+      LIMIT 10;
+    `;
+
+    // Execute all queries
+    const [
+      connectionResult,
+      performanceResult,
+      tablespaceResult,
+      tableSizesResult
+    ] = await Promise.all([
+      pool.query(connectionQuery),
+      pool.query(performanceQuery),
+      pool.query(tablespaceQuery),
+      pool.query(tableSizesQuery)
+    ]);
+
+    // Try to get slow queries (may fail if pg_stat_statements not installed)
+    let slowQueriesResult = { rows: [] };
+    try {
+      slowQueriesResult = await pool.query(slowQueriesQuery);
+    } catch (error) {
+      console.log('pg_stat_statements not available:', error.message);
+    }
+
+    const connectionData = connectionResult.rows[0];
+    const performanceData = performanceResult.rows[0];
+    const tablespaceData = tablespaceResult.rows;
+    const tableSizesData = tableSizesResult.rows;
+    const slowQueriesData = slowQueriesResult.rows;
+
+    // Calculate cache hit ratio
+    const cacheHitRatio = performanceData.blocks_hit > 0 
+      ? ((performanceData.blocks_hit / (performanceData.blocks_hit + performanceData.blocks_read)) * 100)
+      : 0;
+
+    // Format response
+    const metrics = {
+      timestamp: new Date().toISOString(),
+      connections: {
+        active: parseInt(connectionData.active_connections) || 0,
+        idle: parseInt(connectionData.idle_connections) || 0,
+        total: parseInt(connectionData.total_connections) || 0,
+        max: parseInt(connectionData.max_connections) || 100
+      },
+      performance: {
+        cacheHitRatio: parseFloat(cacheHitRatio.toFixed(2)),
+        commits: parseInt(performanceData.commits) || 0,
+        rollbacks: parseInt(performanceData.rollbacks) || 0,
+        tuplesReturned: parseInt(performanceData.tuples_returned) || 0,
+        tuplesFetched: parseInt(performanceData.tuples_fetched) || 0,
+        tuplesInserted: parseInt(performanceData.tuples_inserted) || 0,
+        tuplesUpdated: parseInt(performanceData.tuples_updated) || 0,
+        tuplesDeleted: parseInt(performanceData.tuples_deleted) || 0,
+        conflicts: parseInt(performanceData.conflicts) || 0,
+        deadlocks: parseInt(performanceData.deadlocks) || 0,
+        tempFiles: parseInt(performanceData.temp_files) || 0,
+        tempBytes: parseInt(performanceData.temp_bytes) || 0
+      },
+      storage: {
+        databaseSize: parseInt(performanceData.database_size) || 0,
+        databaseSizeFormatted: formatBytes(parseInt(performanceData.database_size) || 0),
+        tablespaces: tablespaceData.map(ts => ({
+          name: ts.name,
+          size: ts.size,
+          sizeBytes: parseInt(ts.size_bytes) || 0
+        })),
+        largestTables: tableSizesData.map(table => ({
+          schema: table.schemaname,
+          name: table.tablename,
+          totalSize: table.size,
+          tableSize: table.table_size,
+          indexSize: table.index_size,
+          sizeBytes: parseInt(table.size_bytes) || 0
+        }))
+      },
+      slowQueries: slowQueriesData.map(query => ({
+        query: query.query ? query.query.substring(0, 200) + '...' : '',
+        calls: parseInt(query.calls) || 0,
+        totalTime: parseFloat(query.total_exec_time) || 0,
+        meanTime: parseFloat(query.mean_exec_time) || 0,
+        rows: parseInt(query.rows) || 0
+      }))
+    };
+
+    res.json(metrics);
+  } catch (error) {
+    console.error('Error fetching metrics:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper function to format bytes
+function formatBytes(bytes, decimals = 2) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
 
 // Get migration status
 app.get('/api/:env/migrations', async (req, res) => {
@@ -321,6 +537,313 @@ app.use((error, req, res, next) => {
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
+});
+
+// Initialize AI Query Service
+const aiQueryService = new AIQueryService();
+
+// AI Assistant endpoints
+app.post('/api/:env/ai/natural-language', async (req, res) => {
+  try {
+    const { env } = req.params;
+    const { query } = req.body;
+
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ error: 'Query text is required' });
+    }
+
+    if (!pools[env]) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+
+    // Process the natural language query
+    const result = await aiQueryService.processNaturalLanguage(query);
+    
+    res.json({
+      success: true,
+      result: result,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('AI Natural Language Processing Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to process natural language query',
+      details: error.message 
+    });
+  }
+});
+
+app.post('/api/:env/ai/execute-query', async (req, res) => {
+  try {
+    const { env } = req.params;
+    const { sql, safetyCheck = true } = req.body;
+
+    if (!sql || typeof sql !== 'string') {
+      return res.status(400).json({ error: 'SQL query is required' });
+    }
+
+    if (!pools[env]) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+
+    // Perform safety check if enabled
+    if (safetyCheck) {
+      const securityCheck = aiQueryService.performSecurityCheck(sql);
+      if (!securityCheck.safe) {
+        return res.status(400).json({ 
+          error: 'Query failed security check',
+          warnings: securityCheck.warnings 
+        });
+      }
+    }
+
+    // Execute the query with timeout
+    const pool = pools[env];
+    const client = await pool.connect();
+    
+    try {
+      // Set statement timeout to 30 seconds
+      await client.query('SET statement_timeout = 30000');
+      
+      const startTime = Date.now();
+      const result = await client.query(sql);
+      const executionTime = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        data: result.rows,
+        rowCount: result.rowCount,
+        executionTime: executionTime,
+        fields: result.fields?.map(field => ({
+          name: field.name,
+          dataTypeID: field.dataTypeID
+        })) || [],
+        timestamp: new Date().toISOString()
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    console.error('AI Query Execution Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to execute query',
+      details: error.message 
+    });
+  }
+});
+
+app.get('/api/:env/ai/optimization-recommendations', async (req, res) => {
+  try {
+    const { env } = req.params;
+
+    if (!pools[env]) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+
+    const pool = pools[env];
+    const client = await pool.connect();
+    
+    try {
+      // Gather database statistics for optimization recommendations
+      const statsQueries = {
+        slowQueries: `
+          SELECT query, mean_time, calls, total_time
+          FROM pg_stat_statements 
+          WHERE mean_time > 100 
+          ORDER BY mean_time DESC 
+          LIMIT 10
+        `,
+        tableStats: `
+          SELECT 
+            schemaname,
+            tablename,
+            n_tup_ins as inserts,
+            n_tup_upd as updates,
+            n_tup_del as deletes,
+            n_live_tup as live_tuples,
+            n_dead_tup as dead_tuples
+          FROM pg_stat_user_tables
+          ORDER BY n_live_tup DESC
+          LIMIT 20
+        `,
+        indexUsage: `
+          SELECT 
+            schemaname,
+            tablename,
+            indexname,
+            idx_scan,
+            idx_tup_read,
+            idx_tup_fetch
+          FROM pg_stat_user_indexes
+          WHERE idx_scan = 0
+          ORDER BY schemaname, tablename
+        `
+      };
+
+      const databaseStats = {};
+      
+      try {
+        const slowQueriesResult = await client.query(statsQueries.slowQueries);
+        databaseStats.slowQueries = slowQueriesResult.rows;
+      } catch (error) {
+        // pg_stat_statements might not be available
+        databaseStats.slowQueries = [];
+      }
+
+      const tableStatsResult = await client.query(statsQueries.tableStats);
+      databaseStats.tableStats = tableStatsResult.rows;
+
+      const indexUsageResult = await client.query(statsQueries.indexUsage);
+      databaseStats.unusedIndexes = indexUsageResult.rows;
+
+      // Generate recommendations
+      const recommendations = await aiQueryService.generateOptimizationRecommendations(databaseStats);
+
+      res.json({
+        success: true,
+        recommendations: recommendations,
+        databaseStats: databaseStats,
+        timestamp: new Date().toISOString()
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    console.error('AI Optimization Recommendations Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate optimization recommendations',
+      details: error.message 
+    });
+  }
+});
+
+app.get('/api/:env/ai/security-audit', async (req, res) => {
+  try {
+    const { env } = req.params;
+
+    if (!pools[env]) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+
+    const pool = pools[env];
+    const client = await pool.connect();
+    
+    try {
+      const securityChecks = {
+        // Check for users with weak passwords (if we have access to this info)
+        userSecurity: `
+          SELECT 
+            usename as username,
+            valuntil as password_expiry,
+            usesuper as is_superuser
+          FROM pg_user
+          WHERE usesuper = true OR valuntil IS NULL OR valuntil < NOW() + INTERVAL '30 days'
+        `,
+        
+        // Check for tables without primary keys
+        tablesWithoutPK: `
+          SELECT 
+            t.table_schema,
+            t.table_name
+          FROM information_schema.tables t
+          LEFT JOIN information_schema.table_constraints tc 
+            ON t.table_schema = tc.table_schema 
+            AND t.table_name = tc.table_name 
+            AND tc.constraint_type = 'PRIMARY KEY'
+          WHERE t.table_type = 'BASE TABLE'
+            AND t.table_schema NOT IN ('information_schema', 'pg_catalog')
+            AND tc.constraint_name IS NULL
+        `,
+        
+        // Check for columns that might contain sensitive data without encryption
+        sensitiveColumns: `
+          SELECT 
+            table_schema,
+            table_name,
+            column_name,
+            data_type
+          FROM information_schema.columns
+          WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+            AND (
+              LOWER(column_name) LIKE '%password%' OR
+              LOWER(column_name) LIKE '%ssn%' OR
+              LOWER(column_name) LIKE '%credit%' OR
+              LOWER(column_name) LIKE '%card%' OR
+              LOWER(column_name) LIKE '%secret%'
+            )
+        `
+      };
+
+      const securityResults = {};
+      
+      const userSecurityResult = await client.query(securityChecks.userSecurity);
+      securityResults.userSecurity = userSecurityResult.rows;
+
+      const tablesWithoutPKResult = await client.query(securityChecks.tablesWithoutPK);
+      securityResults.tablesWithoutPK = tablesWithoutPKResult.rows;
+
+      const sensitiveColumnsResult = await client.query(securityChecks.sensitiveColumns);
+      securityResults.sensitiveColumns = sensitiveColumnsResult.rows;
+
+      // Generate security alerts
+      const alerts = [];
+
+      if (securityResults.userSecurity.length > 0) {
+        alerts.push({
+          id: 'user-security-' + Date.now(),
+          severity: 'HIGH',
+          title: 'User Security Issues',
+          description: `Found ${securityResults.userSecurity.length} users with potential security issues`,
+          affected: securityResults.userSecurity.map(u => u.username),
+          recommendation: 'Review user privileges and password policies'
+        });
+      }
+
+      if (securityResults.tablesWithoutPK.length > 0) {
+        alerts.push({
+          id: 'no-pk-' + Date.now(),
+          severity: 'MEDIUM',
+          title: 'Tables Without Primary Keys',
+          description: `Found ${securityResults.tablesWithoutPK.length} tables without primary keys`,
+          affected: securityResults.tablesWithoutPK.map(t => `${t.table_schema}.${t.table_name}`),
+          recommendation: 'Add primary keys to ensure data integrity and replication support'
+        });
+      }
+
+      if (securityResults.sensitiveColumns.length > 0) {
+        alerts.push({
+          id: 'sensitive-data-' + Date.now(),
+          severity: 'CRITICAL',
+          title: 'Potentially Unencrypted Sensitive Data',
+          description: `Found ${securityResults.sensitiveColumns.length} columns that may contain sensitive data`,
+          affected: securityResults.sensitiveColumns.map(c => `${c.table_schema}.${c.table_name}.${c.column_name}`),
+          recommendation: 'Ensure sensitive data is properly encrypted and access is restricted'
+        });
+      }
+
+      res.json({
+        success: true,
+        alerts: alerts,
+        details: securityResults,
+        timestamp: new Date().toISOString()
+      });
+
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    console.error('AI Security Audit Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to perform security audit',
+      details: error.message 
+    });
+  }
 });
 
 // 404 handler

@@ -23,6 +23,10 @@ import {
   Code as QueryIcon,
   Backup as BackupIcon,
   Storage as DatabaseIcon,
+  Build as QueryBuilderIcon,
+  AccountTree as SchemaIcon,
+  Timeline as MonitoringIcon,
+  SwapHoriz as BulkOpsIcon,
 } from '@mui/icons-material';
 
 import { useDatabaseContext } from '../contexts/DatabaseContext';
@@ -35,6 +39,10 @@ const menuItems = [
   { path: '/users', label: 'Database Users', icon: UsersIcon },
   { path: '/migrations', label: 'Migrations', icon: MigrationsIcon },
   { path: '/query', label: 'Query Editor', icon: QueryIcon },
+  { path: '/query-builder', label: 'Visual Query Builder', icon: QueryBuilderIcon },
+  { path: '/schema', label: 'Schema Viewer', icon: SchemaIcon },
+  { path: '/monitoring', label: 'Real-time Monitoring', icon: MonitoringIcon },
+  { path: '/bulk-ops', label: 'Bulk Operations', icon: BulkOpsIcon },
   { path: '/backups', label: 'Backups', icon: BackupIcon },
 ];
 

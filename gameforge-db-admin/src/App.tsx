@@ -5,12 +5,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 
 import Sidebar from './components/Sidebar';
+import AIQueryAssistantPanel from './components/AIQueryAssistantPanelSimple';
 import Dashboard from './pages/Dashboard';
 import Tables from './pages/Tables';
 import Users from './pages/Users';
 import Migrations from './pages/Migrations';
 import QueryEditor from './pages/QueryEditor';
 import Backups from './pages/Backups';
+import VisualQueryBuilder from './components/VisualQueryBuilder';
+import DatabaseRelationshipViewer from './components/DatabaseRelationshipViewer';
+import RealTimeMonitoring from './components/RealTimeMonitoring';
+import BulkOperations from './components/BulkOperations';
 import { DatabaseProvider } from './contexts/DatabaseContext';
 
 const theme = createTheme({
@@ -65,9 +70,14 @@ function App() {
                   <Route path="/users" element={<Users />} />
                   <Route path="/migrations" element={<Migrations />} />
                   <Route path="/query" element={<QueryEditor />} />
+                  <Route path="/query-builder" element={<VisualQueryBuilder />} />
+                  <Route path="/schema" element={<DatabaseRelationshipViewer />} />
+                  <Route path="/monitoring" element={<RealTimeMonitoring />} />
+                  <Route path="/bulk-ops" element={<BulkOperations />} />
                   <Route path="/backups" element={<Backups />} />
                 </Routes>
               </Box>
+              <AIQueryAssistantPanel />
             </Box>
           </Router>
         </DatabaseProvider>
