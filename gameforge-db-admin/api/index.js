@@ -372,13 +372,23 @@ app.get('/api/:env/users', async (req, res) => {
     
     const query = `
       SELECT 
-        usename as username,
-        usecreatedb as can_create_db,
-        usesuper as is_superuser,
-        userepl as can_replicate,
-        valuntil as password_expiry
-      FROM pg_user
-      ORDER BY usename;
+        u.usename as username,
+        u.usecreatedb as can_create_db,
+        u.usesuper as is_superuser,
+        u.userepl as can_replicate,
+        u.valuntil as password_expiry,
+        COALESCE(
+          d.description,
+          CASE 
+            WHEN u.usename = 'postgres' THEN 'PostgreSQL Superuser'
+            WHEN u.usesuper THEN 'Database Administrator'
+            WHEN u.usecreatedb THEN 'Database Creator'
+            ELSE 'Standard User'
+          END
+        ) as display_name
+      FROM pg_user u
+      LEFT JOIN pg_description d ON d.objoid = u.usesysid AND d.classoid = 'pg_authid'::regclass
+      ORDER BY u.usename;
     `;
     
     const result = await pool.query(query);
@@ -492,6 +502,223 @@ app.delete('/api/:env/users/:username', async (req, res) => {
     await pool.query(`DROP USER IF EXISTS "${username}"`);
     
     res.json({ message: 'User deleted successfully', username });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update user display name
+app.put('/api/:env/users/:username/display-name', async (req, res) => {
+  try {
+    const { env, username } = req.params;
+    const { display_name } = req.body;
+    const pool = pools[env];
+    
+    if (!pool) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+    
+    if (!display_name || display_name.trim() === '') {
+      return res.status(400).json({ error: 'Display name is required' });
+    }
+    
+    // First get the user's OID
+    const userOidQuery = 'SELECT usesysid FROM pg_user WHERE usename = $1';
+    const userOidResult = await pool.query(userOidQuery, [username]);
+    
+    if (userOidResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const userOid = userOidResult.rows[0].usesysid;
+    
+    // Check if description already exists
+    const existingDescQuery = `
+      SELECT objoid FROM pg_description 
+      WHERE objoid = $1 AND classoid = 'pg_authid'::regclass
+    `;
+    const existingDescResult = await pool.query(existingDescQuery, [userOid]);
+    
+    if (existingDescResult.rows.length > 0) {
+      // Update existing description
+      await pool.query(`
+        UPDATE pg_description 
+        SET description = $1 
+        WHERE objoid = $2 AND classoid = 'pg_authid'::regclass
+      `, [display_name.trim(), userOid]);
+    } else {
+      // Insert new description
+      await pool.query(`
+        INSERT INTO pg_description (objoid, classoid, objsubid, description)
+        VALUES ($1, 'pg_authid'::regclass, 0, $2)
+      `, [userOid, display_name.trim()]);
+    }
+    
+    res.json({ 
+      message: 'Display name updated successfully', 
+      username, 
+      display_name: display_name.trim() 
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get detailed user information
+app.get('/api/:env/users/:username/details', async (req, res) => {
+  try {
+    const { env, username } = req.params;
+    const pool = pools[env];
+    
+    if (!pool) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+    
+    // Get detailed user information including activity and permissions
+    const userDetailsQuery = `
+      SELECT 
+        u.usename as username,
+        u.usecreatedb as can_create_db,
+        u.usesuper as is_superuser,
+        u.userepl as can_replicate,
+        u.valuntil as password_expiry,
+        COALESCE(
+          d.description,
+          CASE 
+            WHEN u.usename = 'postgres' THEN 'PostgreSQL Superuser'
+            WHEN u.usesuper THEN 'Database Administrator'
+            WHEN u.usecreatedb THEN 'Database Creator'
+            ELSE 'Standard User'
+          END
+        ) as display_name,
+        CASE WHEN u.usename IS NOT NULL THEN true ELSE false END as is_active,
+        (SELECT backend_start FROM pg_stat_activity WHERE usename = u.usename ORDER BY backend_start DESC LIMIT 1) as last_login,
+        (SELECT COUNT(*) FROM pg_stat_activity WHERE usename = u.usename) as active_connections
+      FROM pg_user u
+      LEFT JOIN pg_description d ON d.objoid = u.usesysid AND d.classoid = 'pg_authid'::regclass
+      WHERE u.usename = $1;
+    `;
+    
+    const permissionsQuery = `
+      SELECT 
+        r.rolname as role_name,
+        n.nspname as schema_name,
+        c.relname as object_name,
+        c.relkind as object_type,
+        ARRAY_AGG(p.privilege_type) as privileges
+      FROM pg_roles r
+      LEFT JOIN pg_namespace n ON true
+      LEFT JOIN pg_class c ON c.relnamespace = n.oid
+      LEFT JOIN (
+        SELECT 
+          grantee,
+          table_schema,
+          table_name,
+          privilege_type
+        FROM information_schema.table_privileges
+        WHERE grantee = $1
+        UNION ALL
+        SELECT 
+          grantee,
+          specific_schema as table_schema,
+          specific_name as table_name,
+          privilege_type
+        FROM information_schema.routine_privileges
+        WHERE grantee = $1
+      ) p ON p.grantee = r.rolname AND p.table_schema = n.nspname AND p.table_name = c.relname
+      WHERE r.rolname = $1
+      GROUP BY r.rolname, n.nspname, c.relname, c.relkind
+      HAVING COUNT(p.privilege_type) > 0;
+    `;
+    
+    const [userResult, permissionsResult] = await Promise.all([
+      pool.query(userDetailsQuery, [username]),
+      pool.query(permissionsQuery, [username])
+    ]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const userDetails = userResult.rows[0];
+    userDetails.permissions = permissionsResult.rows;
+    userDetails.connection_count = userDetails.active_connections || 0;
+    
+    res.json(userDetails);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get databases owned by user
+app.get('/api/:env/users/:username/databases', async (req, res) => {
+  try {
+    const { env, username } = req.params;
+    const pool = pools[env];
+    
+    if (!pool) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+    
+    const query = `
+      SELECT 
+        d.datname as name,
+        pg_size_pretty(pg_database_size(d.datname)) as size,
+        d.datcollate as collation,
+        d.datctype as ctype,
+        (SELECT COUNT(*) FROM information_schema.tables WHERE table_catalog = d.datname) as table_count
+      FROM pg_database d
+      JOIN pg_roles r ON d.datdba = r.oid
+      WHERE r.rolname = $1
+      AND d.datname NOT IN ('template0', 'template1')
+      ORDER BY d.datname;
+    `;
+    
+    const result = await pool.query(query, [username]);
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get user connection history
+app.get('/api/:env/users/:username/connections', async (req, res) => {
+  try {
+    const { env, username } = req.params;
+    const pool = pools[env];
+    
+    if (!pool) {
+      return res.status(400).json({ error: 'Invalid environment' });
+    }
+    
+    // Get current active connections
+    const activeConnectionsQuery = `
+      SELECT 
+        pid,
+        datname as database,
+        client_addr,
+        client_port,
+        backend_start as connect_time,
+        state,
+        EXTRACT(EPOCH FROM (now() - backend_start)) as duration
+      FROM pg_stat_activity
+      WHERE usename = $1
+      AND state IS NOT NULL
+      ORDER BY backend_start DESC;
+    `;
+    
+    const result = await pool.query(activeConnectionsQuery, [username]);
+    
+    // Note: PostgreSQL doesn't store historical connection data by default
+    // In a production environment, you might want to log this to a separate table
+    const connections = result.rows.map(row => ({
+      ...row,
+      duration: Math.round(row.duration || 0),
+      connect_time: row.connect_time,
+      status: row.state || 'unknown'
+    }));
+    
+    res.json(connections);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

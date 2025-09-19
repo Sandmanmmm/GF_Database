@@ -50,6 +50,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { databaseApi } from '../services/api';
 import type { CreateUserRequest, UpdateUserRequest } from '../services/api';
 import { useDatabaseContext } from '../contexts/DatabaseContext';
+import UserDetailsDialog from '../components/UserDetailsDialog';
 
 const Users: React.FC = () => {
   const { currentEnvironment } = useDatabaseContext();
@@ -59,6 +60,8 @@ const Users: React.FC = () => {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [userDetailsOpen, setUserDetailsOpen] = useState(false);
+  const [userDetailsData, setUserDetailsData] = useState<any>(null);
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false,
     message: '',
@@ -174,6 +177,11 @@ const Users: React.FC = () => {
     setAnchorEl(null);
   };
 
+  const handleUserRowClick = (user: any) => {
+    setUserDetailsData(user);
+    setUserDetailsOpen(true);
+  };
+
   return (
     <Box>
       <Box sx={{ mb: 4 }}>
@@ -260,15 +268,29 @@ const Users: React.FC = () => {
                     <TableRow 
                       key={user.username}
                       hover
+                      onClick={() => handleUserRowClick(user)}
+                      sx={{ 
+                        cursor: 'pointer',
+                        '&:hover': {
+                          backgroundColor: 'action.hover'
+                        }
+                      }}
                     >
                       <TableCell>
                         <Box sx={{ display: 'flex', alignItems: 'center' }}>
                           <Avatar sx={{ mr: 2, width: 32, height: 32 }}>
                             <PersonIcon fontSize="small" />
                           </Avatar>
-                          <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                            {user.username}
-                          </Typography>
+                          <Box>
+                            <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                              {user.display_name || user.username}
+                            </Typography>
+                            {user.display_name && user.display_name !== user.username && (
+                              <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.875rem' }}>
+                                @{user.username}
+                              </Typography>
+                            )}
+                          </Box>
                         </Box>
                       </TableCell>
                       <TableCell>
@@ -321,6 +343,7 @@ const Users: React.FC = () => {
                         <Tooltip title="User actions">
                           <IconButton
                             onClick={(e) => {
+                              e.stopPropagation(); // Prevent row click when clicking actions
                               setSelectedUser(user);
                               setAnchorEl(e.currentTarget);
                             }}
@@ -501,6 +524,14 @@ const Users: React.FC = () => {
           {snackbar.message}
         </Alert>
       </Snackbar>
+
+      {/* User Details Dialog */}
+      <UserDetailsDialog
+        open={userDetailsOpen}
+        onClose={() => setUserDetailsOpen(false)}
+        user={userDetailsData}
+        environment={currentEnvironment}
+      />
     </Box>
   );
 };

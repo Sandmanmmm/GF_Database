@@ -66,33 +66,6 @@ interface QuerySuggestion {
   explanation: string;
 }
 
-interface OptimizationRecommendation {
-  id: string;
-  type: 'INDEX' | 'QUERY' | 'SCHEMA' | 'PERFORMANCE';
-  title: string;
-  description: string;
-  impact: 'HIGH' | 'MEDIUM' | 'LOW';
-  effort: 'LOW' | 'MEDIUM' | 'HIGH';
-  sqlSuggestion?: string;
-}
-
-interface SecurityAlert {
-  id: string;
-  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-  title: string;
-  description: string;
-  affected: string[];
-  recommendation: string;
-}
-
-interface PerformanceMetric {
-  name: string;
-  value: number;
-  unit: string;
-  status: 'good' | 'warning' | 'critical';
-  trend: number[];
-}
-
 const AIQueryAssistantPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState(0);
   const [naturalLanguageQuery, setNaturalLanguageQuery] = useState('');
@@ -112,7 +85,6 @@ const AIQueryAssistantPanel: React.FC = () => {
   const {
     data: optimizationData,
     isLoading: isLoadingOptimization,
-    refetch: refetchOptimization,
   } = useOptimizationRecommendations();
 
   const {

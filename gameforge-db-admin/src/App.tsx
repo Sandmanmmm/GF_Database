@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 
 import Sidebar from './components/Sidebar';
-import AIQueryAssistantPanel from './components/AIQueryAssistantPanelSimple';
+import AIQueryAssistantPanel from './components/AIQueryAssistantPanel';
 import Dashboard from './pages/Dashboard';
 import Tables from './pages/Tables';
 import Users from './pages/Users';

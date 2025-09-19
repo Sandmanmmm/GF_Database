@@ -25,6 +25,7 @@ export interface MigrationInfo {
 
 export interface UserInfo {
   username: string;
+  display_name: string;
   can_create_db: boolean;
   is_superuser: boolean;
   can_replicate: boolean;
@@ -149,6 +150,19 @@ export const databaseApi = {
 
   deleteUser: (env: string, username: string): Promise<{ data: { message: string; username: string } }> =>
     api.delete(`/${env}/users/${username}`),
+
+  updateUserDisplayName: (env: string, username: string, display_name: string): Promise<{ data: { message: string; username: string; display_name: string } }> =>
+    api.put(`/${env}/users/${username}/display-name`, { display_name }),
+
+  // User Details
+  getUserDetails: (env: string, username: string): Promise<{ data: any }> =>
+    api.get(`/${env}/users/${username}/details`),
+
+  getUserDatabases: (env: string, username: string): Promise<{ data: any[] }> =>
+    api.get(`/${env}/users/${username}/databases`),
+
+  getUserConnectionHistory: (env: string, username: string): Promise<{ data: any[] }> =>
+    api.get(`/${env}/users/${username}/connections`),
 
   // Database metrics
   getMetrics: (env: string): Promise<{ data: DatabaseMetrics }> =>
